@@ -1,0 +1,302 @@
+//@version=5
+strategy("Claude Quant - Multi-Session Strategy (Reference)", 
+         overlay=true, 
+         initial_capital=100000,
+         default_qty_type=strategy.percent_of_equity,
+         commission_type=strategy.commission.percent,
+         commission_value=0.04,
+         slippage=2)
+
+// ============================================================================
+// CLAUDE QUANT - Session Sequencing Strategy
+// Reference Implementation
+// ============================================================================
+//
+// This demonstrates our session-based trading framework.
+// 
+// ⚠️  IMPORTANT:
+// - Actual position sizing parameters are proprietary
+// - Signal generation logic is proprietary
+// - This shows the ARCHITECTURE, not exact implementation
+// - Values shown are illustrative examples
+//
+// What you CAN see:
+// ✓ Session sequencing structure
+// ✓ VIX integration approach
+// ✓ Risk management framework
+// ✓ Conditional expansion logic
+//
+// What you CAN'T see:
+// ✗ Actual position size limits (proprietary)
+// ✗ Real signal generation (proprietary)
+// ✗ Exact expansion amounts (proprietary)
+//
+// ============================================================================
+
+// ════════════════════════════════════════════════════════════════════════════
+// CONFIGURATION
+// ════════════════════════════════════════════════════════════════════════════
+
+// Portfolio-level protection
+// NOTE: Actual value is proprietary - example shown
+portfolio_stop_pct = input.float(-8.0, "Portfolio Stop (%)", 
+                                  tooltip="Example value - production is proprietary")
+
+// Session selection
+session_type = input.string("NASDAQ", "Trading Session", 
+                            options=["NIKKEI", "DAX", "NASDAQ"])
+
+// Per-market risk limits (EXAMPLES - actual values proprietary)
+// Long limits
+nikkei_long_base = input.float(4.0, "Nikkei Long Base (%)", 
+                               tooltip="Example - actual value proprietary")
+dax_long_base = input.float(1.5, "DAX Long Base (%)",
+                            tooltip="Example - actual value proprietary")
+nasdaq_long_base = input.float(2.0, "Nasdaq Long Base (%)",
+                               tooltip="Example - actual value proprietary")
+
+// Short limits  
+nikkei_short_base = input.float(1.0, "Nikkei Short Base (%)",
+                                tooltip="Example - actual value proprietary")
+dax_short_base = input.float(0.5, "DAX Short Base (%)",
+                             tooltip="Example - actual value proprietary")
+nasdaq_short_base = input.float(2.5, "Nasdaq Short Base (%)",
+                                tooltip="Example - actual value proprietary")
+
+// Conditional expansion (enabled/disabled)
+enable_expansion = input.bool(true, "Enable Conditional Expansion",
+                              tooltip="Expand limits when Nikkei closes green")
+
+// Expanded limits (EXAMPLES - actual values proprietary)
+dax_long_expanded = input.float(2.0, "DAX Long Expanded (%)",
+                                tooltip="Example - actual value proprietary")
+nasdaq_long_expanded = input.float(3.0, "Nasdaq Long Expanded (%)",
+                                   tooltip="Example - actual value proprietary")
+
+// VIX-based sizing (actual thresholds shown - these are standard)
+enable_vix = input.bool(true, "Enable VIX Adjustment")
+vix_low = input.float(15, "VIX Low Threshold")
+vix_normal = input.float(20, "VIX Normal Threshold")
+vix_elevated = input.float(30, "VIX Elevated Threshold")
+
+// ════════════════════════════════════════════════════════════════════════════
+// SESSION TIMING
+// ════════════════════════════════════════════════════════════════════════════
+
+// Nikkei (Tokyo): 00:00-06:00 JST
+nikkei_session = time(timeframe.period, "0000-0600:23456", "Asia/Tokyo")
+is_nikkei = not na(nikkei_session)
+
+// DAX (Frankfurt): 08:00-16:30 CET
+dax_session = time(timeframe.period, "0800-1630:23456", "Europe/Berlin")
+is_dax = not na(dax_session)
+
+// Nasdaq (New York): 15:30-22:00 EST (futures pre-market to close)
+nasdaq_session = time(timeframe.period, "1530-2200:23456", "America/New_York")
+is_nasdaq = not na(nasdaq_session)
+
+// Session transitions
+session_opened = (is_nikkei and not is_nikkei[1]) or 
+                 (is_dax and not is_dax[1]) or 
+                 (is_nasdaq and not is_nasdaq[1])
+
+session_closed = (not is_nikkei and is_nikkei[1]) or 
+                 (not is_dax and is_dax[1]) or 
+                 (not is_nasdaq and is_nasdaq[1])
+
+// ════════════════════════════════════════════════════════════════════════════
+// VIX REGIME DETECTION
+// ════════════════════════════════════════════════════════════════════════════
+
+vix = request.security("TVC:VIX", "D", close, lookahead=barmerge.lookahead_off)
+
+// Classify regime
+vix_regime = vix < vix_low ? 0 :        // Low
+             vix < vix_normal ? 1 :     // Normal  
+             vix < vix_elevated ? 2 :   // Elevated
+             3                           // Crisis
+
+regime_name = vix_regime == 0 ? "LOW" :
+              vix_regime == 1 ? "NORMAL" :
+              vix_regime == 2 ? "ELEVATED" :
+              "CRISIS"
+
+// Position size multiplier
+vix_mult = vix_regime == 0 ? 1.00 :
+           vix_regime == 1 ? 0.85 :
+           vix_regime == 2 ? 0.65 :
+           0.40
+
+// ════════════════════════════════════════════════════════════════════════════
+// RISK MANAGEMENT
+// ════════════════════════════════════════════════════════════════════════════
+
+// Track daily P&L
+var float daily_start = strategy.initial_capital
+var int last_day = dayofmonth
+
+if dayofmonth != last_day
+    daily_start := strategy.equity
+    last_day := dayofmonth
+
+daily_pnl_pct = (strategy.equity - daily_start) / daily_start * 100
+
+// Portfolio stop check
+portfolio_stopped = daily_pnl_pct <= portfolio_stop_pct
+
+// Nikkei session result tracking (for expansion)
+var float nikkei_pnl = 0.0
+var bool nikkei_green = false
+
+if session_closed and session_type == "NIKKEI"
+    nikkei_pnl := daily_pnl_pct
+    nikkei_green := nikkei_pnl >= 0
+
+// ════════════════════════════════════════════════════════════════════════════
+// POSITION SIZING
+// ════════════════════════════════════════════════════════════════════════════
+
+get_position_limit(sess, direction) =>
+    float limit = 0.0
+    
+    if sess == "NIKKEI"
+        limit := direction == "LONG" ? nikkei_long_base : nikkei_short_base
+    
+    else if sess == "DAX"
+        long_limit = enable_expansion and nikkei_green ? 
+                    dax_long_expanded : dax_long_base
+        limit := direction == "LONG" ? long_limit : dax_short_base
+    
+    else if sess == "NASDAQ"
+        long_limit = enable_expansion and nikkei_green ? 
+                    nasdaq_long_expanded : nasdaq_long_base
+        limit := direction == "LONG" ? long_limit : nasdaq_short_base
+    
+    limit
+
+calculate_position_size(sess, direction) =>
+    base = get_position_limit(sess, direction)
+    adjusted = enable_vix ? base * vix_mult : base
+    adjusted
+
+// ════════════════════════════════════════════════════════════════════════════
+// SIGNAL GENERATION
+// ════════════════════════════════════════════════════════════════════════════
+
+// ⚠️  PLACEHOLDER SIGNALS
+// Production uses proprietary multi-factor signal generation
+// This simple momentum is for demonstration only
+
+lookback = input.int(20, "Signal Lookback (Placeholder)")
+mom = ta.change(close, lookback)
+
+signal_long = mom > 0
+signal_short = mom < 0
+
+// ════════════════════════════════════════════════════════════════════════════
+// EXECUTION
+// ════════════════════════════════════════════════════════════════════════════
+
+// Are we in the correct session?
+in_session = (session_type == "NIKKEI" and is_nikkei) or 
+             (session_type == "DAX" and is_dax) or
+             (session_type == "NASDAQ" and is_nasdaq)
+
+// Can we trade?
+can_trade = in_session and not portfolio_stopped
+
+// Long entry
+if can_trade and signal_long and strategy.position_size == 0
+    size = calculate_position_size(session_type, "LONG")
+    strategy.entry("LONG", strategy.long, qty_percent=size)
+
+// Short entry
+if can_trade and signal_short and strategy.position_size == 0
+    size = calculate_position_size(session_type, "SHORT")
+    strategy.entry("SHORT", strategy.short, qty_percent=size)
+
+// Flatten on session close (zero overnight exposure)
+if session_closed or portfolio_stopped
+    strategy.close_all("FLATTEN")
+
+// ════════════════════════════════════════════════════════════════════════════
+// VISUALIZATION
+// ════════════════════════════════════════════════════════════════════════════
+
+// Session backgrounds
+bgcolor(is_nikkei ? color.new(color.blue, 95) : na)
+bgcolor(is_dax ? color.new(color.orange, 95) : na)
+bgcolor(is_nasdaq ? color.new(color.purple, 95) : na)
+
+// VIX crisis warning
+bgcolor(vix_regime == 3 ? color.new(color.red, 90) : na)
+
+// Expansion indicator
+expansion_active = enable_expansion and nikkei_green and (is_dax or is_nasdaq)
+plotshape(expansion_active, style=shape.diamond, location=location.bottom,
+          color=color.yellow, size=size.tiny, title="Expansion Active")
+
+// ════════════════════════════════════════════════════════════════════════════
+// INFO TABLE
+// ════════════════════════════════════════════════════════════════════════════
+
+var table t = table.new(position.top_right, 2, 7, 
+                        bgcolor=color.new(color.black, 85),
+                        border_width=1)
+
+if barstate.islast
+    table.cell(t, 0, 0, "Metric", bgcolor=color.gray, text_color=color.white)
+    table.cell(t, 1, 0, "Value", bgcolor=color.gray, text_color=color.white)
+    
+    table.cell(t, 0, 1, "Session", text_color=color.white)
+    table.cell(t, 1, 1, session_type, text_color=color.aqua)
+    
+    table.cell(t, 0, 2, "Daily P&L", text_color=color.white)
+    pnl_color = daily_pnl_pct >= 0 ? color.lime : color.red
+    table.cell(t, 1, 2, str.tostring(daily_pnl_pct, "#.##") + "%", text_color=pnl_color)
+    
+    table.cell(t, 0, 3, "VIX", text_color=color.white)
+    table.cell(t, 1, 3, str.tostring(vix, "#.#") + " (" + regime_name + ")", 
+               text_color=color.orange)
+    
+    table.cell(t, 0, 4, "VIX Mult", text_color=color.white)
+    table.cell(t, 1, 4, str.tostring(vix_mult, "#.##") + "x", text_color=color.aqua)
+    
+    table.cell(t, 0, 5, "Nikkei", text_color=color.white)
+    nikkei_txt = nikkei_green ? "GREEN ✓" : "RED ✗"
+    table.cell(t, 1, 5, nikkei_txt, text_color=nikkei_green ? color.lime : color.gray)
+    
+    table.cell(t, 0, 6, "Expanded", text_color=color.white)
+    table.cell(t, 1, 6, expansion_active ? "YES" : "NO",
+               text_color=expansion_active ? color.yellow : color.gray)
+
+// ════════════════════════════════════════════════════════════════════════════
+// DISCLAIMER
+// ════════════════════════════════════════════════════════════════════════════
+//
+// ⚠️  IMPORTANT DISCLAIMERS:
+//
+// 1. PLACEHOLDER VALUES
+//    Position sizing parameters shown are EXAMPLES ONLY.
+//    Actual production values are proprietary intellectual property.
+//
+// 2. SIMPLIFIED SIGNALS
+//    Signal generation shown uses basic momentum for demonstration.
+//    Production system uses proprietary multi-factor algorithms.
+//
+// 3. REFERENCE ONLY
+//    This code demonstrates architectural concepts.
+//    It is NOT the actual production trading system.
+//
+// 4. NO GUARANTEE
+//    Past performance does not guarantee future results.
+//    Trading futures involves substantial risk of loss.
+//
+// 5. NOT INVESTMENT ADVICE
+//    This is educational content only.
+//    Consult a licensed financial advisor before trading.
+//
+// For complete performance data and verification:
+// → github.com/[your-repo]/claude-quant
+//
+// ════════════════════════════════════════════════════════════════════════════

@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 ClaudeQuant
+Copyright (c) 2026 Claude Quant
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,23 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+ADDITIONAL TERMS FOR PERFORMANCE DATA:
+
+The performance data (CSV files in /data directory) is released into the
+PUBLIC DOMAIN. You may use, modify, distribute, and build upon this data
+for any purpose without restriction or attribution.
+
+The purpose is complete transparency and independent verification of claims.
+
+---
+
+PROPRIETARY TRADING SIGNALS:
+
+This license does NOT include proprietary trading signals, entry/exit logic,
+or specific indicator parameters. Those remain confidential and are NOT
+part of this repository.
+
+Only methodology documentation, performance data, and risk framework are shared.
